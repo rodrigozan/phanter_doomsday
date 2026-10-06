@@ -122,6 +122,10 @@ export async function salvarConfiguracao(config) {
   const registro = {
     user_id: usuario.id,
     limiar_confianca: config.limiar_confianca,
+    modo_executor: config.modo_executor,
+    limiar_noul: config.limiar_noul,
+    agy_sem_confirmacao: config.agy_sem_confirmacao,
+    agy_modelos: config.agy_modelos,
     permission_mode: config.permission_mode,
     allowed_tools: config.allowed_tools,
     updated_at: new Date().toISOString()

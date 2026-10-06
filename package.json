@@ -20,6 +20,8 @@
       "orquestrador.js",
       "roteador.js",
       "claude.js",
+      "agy.js",
+      "modelos.js",
       "supabase.js",
       "renderer/**/*",
       "package.json",
