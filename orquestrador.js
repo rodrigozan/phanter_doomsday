@@ -3,11 +3,14 @@ import { dirname } from "node:path";
 import { executarClaude, TIMEOUT_PADRAO_MS } from "./claude.js";
 import { executarAgy, verificarAgy } from "./agy.js";
 import { rotear, MODELOS } from "./roteador.js";
+import { normalizarModelosAntigravity } from "./modelos.js";
 import * as banco from "./supabase.js";
 
 const ativas = new Map();
 
 export const MODOS_MODELO = ["automatico", ...MODELOS];
+export const MODOS_ANTIGRAVITY = ["flash", "flash_alto", "pro"];
+export const MODOS_PERMISSAO_TAREFA = ["default", "acceptEdits", "plan"];
 
 function pastaValida(caminho) {
   try {
@@ -34,8 +37,9 @@ export function montarPrompt(texto, anexos) {
   return `${texto}\n\nArquivos anexados:\n${referencias.join("\n")}`;
 }
 
-export async function executar({ projetoId, conversaId = null, tarefa, modoModelo = "automatico", modoExecutor = "automatico", timeoutMin, anexos = [], aprovadas = [] }) {
-  if (!MODOS_MODELO.includes(modoModelo)) throw new Error("Modo de modelo inválido.");
+export async function executar({ projetoId, conversaId = null, tarefa, modoModelo = "automatico", modoExecutor = "automatico", modoPermissao, timeoutMin, anexos = [], aprovadas = [] }) {
+  if (![...MODOS_MODELO, ...MODOS_ANTIGRAVITY].includes(modoModelo)) throw new Error("Modo de modelo inválido.");
+  if (modoPermissao != null && !MODOS_PERMISSAO_TAREFA.includes(modoPermissao)) throw new Error("Modo de permissão inválido.");
   const texto = String(tarefa ?? "").trim();
   if (!texto) throw new Error("Digite a tarefa a ser executada.");
   if (ativas.has(projetoId)) throw new Error("Já existe uma execução em andamento neste projeto.");
@@ -56,6 +60,7 @@ export async function executar({ projetoId, conversaId = null, tarefa, modoModel
     }
 
     const config = await banco.obterConfiguracao();
+    const permissao = modoPermissao ?? config.permission_mode;
 
     let modelo = modoModelo;
     let executor = modoExecutor;
@@ -67,7 +72,14 @@ export async function executar({ projetoId, conversaId = null, tarefa, modoModel
       jev = rota.jev;
       if (rota.aviso) avisos.push(rota.aviso);
     }
-    if (modoModelo !== "automatico" && executor === "claude_code") modelo = modoModelo;
+    if (modoModelo !== "automatico" && executor === "claude_code") {
+      if (!MODELOS.includes(modoModelo)) throw new Error("Escolha um modelo Claude para o executor Claude Code.");
+      modelo = modoModelo;
+    }
+    if (modoModelo !== "automatico" && executor === "antigravity") {
+      if (!MODOS_ANTIGRAVITY.includes(modoModelo)) throw new Error("Escolha um modelo Gemini para o executor Antigravity.");
+      modelo = normalizarModelosAntigravity(config.agy_modelos)[modoModelo];
+    }
     const ambienteAgy = executor === "antigravity" ? await verificarAgy() : null;
     if (executor === "antigravity" && !ambienteAgy.disponivel) {
       if (modoExecutor === "antigravity") throw new Error(ambienteAgy.aviso);
@@ -83,7 +95,7 @@ export async function executar({ projetoId, conversaId = null, tarefa, modoModel
     const prompt = montarPrompt(texto, anexos);
     const criarProcesso = (qual, modeloEscolhido) => qual === "antigravity"
       ? executarAgy({ cwd: projeto.caminho, prompt, modelo: modeloEscolhido, permitirSemConfirmacao: config.agy_sem_confirmacao, suportaModelo: ambienteAgy?.suportaModelo ?? true, timeoutMs })
-      : executarClaude({ cwd: projeto.caminho, prompt, diretorios: [...new Set(anexos.map((a) => dirname(a.caminho)))], modelo: modeloEscolhido, modoPermissao: config.permission_mode, sessionId: conversa.session_id, ferramentas: [...new Set([...(config.allowed_tools ?? []), ...aprovadas])], timeoutMs });
+      : executarClaude({ cwd: projeto.caminho, prompt, diretorios: [...new Set(anexos.map((a) => dirname(a.caminho)))], modelo: modeloEscolhido, modoPermissao: permissao, sessionId: conversa.session_id, ferramentas: [...new Set([...(config.allowed_tools ?? []), ...aprovadas])], timeoutMs });
     if (executor === "antigravity" && !config.agy_sem_confirmacao) avisos.push("No Antigravity, tarefas que editam arquivos ou rodam comandos podem aguardar confirmação até o tempo limite.");
     let processo = criarProcesso(executor, modelo);
     ativas.set(projetoId, processo);

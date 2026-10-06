@@ -284,6 +284,7 @@ function registrarHandlers() {
         tarefa: texto(dados?.tarefa, 50000),
         modoModelo: texto(dados?.modoModelo, 20),
         modoExecutor: texto(dados?.modoExecutor ?? "automatico", 20),
+        modoPermissao: dados?.modoPermissao == null ? undefined : texto(dados.modoPermissao, 20),
         timeoutMin: dados?.timeoutMin,
         anexos: usados,
         aprovadas

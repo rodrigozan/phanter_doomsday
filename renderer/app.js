@@ -13,6 +13,8 @@ const estado = {
   executando: new Set(),
   modoModelo: "automatico",
   modoExecutor: "automatico",
+  modoPermissao: "acceptEdits",
+  configuracao: null,
   timeoutMin: 30,
   tarefa: "",
   anexos: [],
@@ -204,7 +206,13 @@ async function carregarTudo() {
 
 async function abrirPrincipal() {
   try {
-    await carregarTudo();
+    await Promise.all([
+      carregarTudo(),
+      chamar(api.config.obter()).then((config) => {
+        estado.configuracao = config;
+        estado.modoPermissao = config.permission_mode ?? "acceptEdits";
+      })
+    ]);
   } catch (erro) {
     estado.avisoAmbiente = erro.message;
   }
@@ -414,7 +422,7 @@ async function executar(continuacao = null) {
   renderPrincipal();
   let resposta;
   try {
-    resposta = await chamar(api.tarefa.executar({ projetoId: projeto.id, conversaId: conversaOrigem, tarefa, modoModelo: estado.modoModelo, modoExecutor: estado.modoExecutor, timeoutMin: Number(estado.timeoutMin), anexoIds, aprovadas: continuacao ? continuacao.aprovadas : [] }));
+    resposta = await chamar(api.tarefa.executar({ projetoId: projeto.id, conversaId: conversaOrigem, tarefa, modoModelo: estado.modoModelo, modoExecutor: estado.modoExecutor, modoPermissao: estado.modoPermissao, timeoutMin: Number(estado.timeoutMin), anexoIds, aprovadas: continuacao ? continuacao.aprovadas : [] }));
   } catch (erro) {
     resposta = { status: "erro", resultado: erro.message, avisos: [], modelo: null };
   }
@@ -566,8 +574,16 @@ function compositor(projeto) {
     )
   );
 
-  const modelo = el("select", { disabled: rodando },
-    [["automatico", "Automático (Jev)"], ["haiku", "haiku"], ["sonnet", "sonnet"], ["opus", "opus"]].map(([valor, rotulo]) => {
+  const modelosGemini = [
+    ["flash", "Gemini Flash"],
+    ["flash_alto", "Gemini Flash (alto)"],
+    ["pro", "Gemini Pro"]
+  ].map(([chave, padrao]) => [chave, estado.configuracao?.agy_modelos?.[chave] || padrao]);
+  const opcoesModelo = estado.modoExecutor === "antigravity"
+    ? [["automatico", "Automático (Gemini)"], ...modelosGemini]
+    : [["automatico", "Automático (Jev)"], ["haiku", "haiku"], ["sonnet", "sonnet"], ["opus", "opus"]];
+  const modelo = el("select", { disabled: rodando, title: "Modelo" },
+    opcoesModelo.map(([valor, rotulo]) => {
       const opcao = el("option", { value: valor }, rotulo);
       if (valor === estado.modoModelo) opcao.selected = true;
       return opcao;
@@ -582,7 +598,20 @@ function compositor(projeto) {
       return opcao;
     })
   );
-  executor.addEventListener("change", () => { estado.modoExecutor = executor.value; });
+  executor.addEventListener("change", () => {
+    estado.modoExecutor = executor.value;
+    estado.modoModelo = "automatico";
+    renderPrincipal();
+  });
+
+  const modo = el("select", { disabled: rodando, title: "Modo de execução" },
+    [["acceptEdits", "Automático"], ["default", "Edição manual"], ["plan", "Plano"]].map(([valor, rotulo]) => {
+      const opcao = el("option", { value: valor }, rotulo);
+      if (valor === estado.modoPermissao) opcao.selected = true;
+      return opcao;
+    })
+  );
+  modo.addEventListener("change", () => { estado.modoPermissao = modo.value; });
 
   const tempo = el("input", { type: "number", min: "1", max: "240", value: String(estado.timeoutMin), class: "curto", title: "Tempo limite (min)", disabled: rodando });
   tempo.addEventListener("input", () => { estado.timeoutMin = tempo.value; });
@@ -595,6 +624,7 @@ function compositor(projeto) {
       el("button", { onclick: selecionarAnexos, disabled: rodando }, "Anexar"),
       executor,
       modelo,
+      modo,
       el("span", { class: "fog" }, "min"),
       tempo,
       el("div", { class: "expande" }),
@@ -694,9 +724,9 @@ async function telaConfiguracoes() {
   const modelosAgy = el("textarea", { placeholder: "flash=\nflash_alto=\npro=" });
   modelosAgy.value = Object.entries(config.agy_modelos ?? {}).map(([chave, valor]) => `${chave}=${valor}`).join("\n");
   const modo = el("select", {},
-    ["default", "acceptEdits", "plan"].map((m) => {
-      const opcao = el("option", { value: m }, m);
-      if (m === config.permission_mode) opcao.selected = true;
+    [["acceptEdits", "Automático"], ["default", "Edição manual"], ["plan", "Plano"]].map(([valor, rotulo]) => {
+      const opcao = el("option", { value: valor }, rotulo);
+      if (valor === config.permission_mode) opcao.selected = true;
       return opcao;
     })
   );
@@ -721,15 +751,18 @@ async function telaConfiguracoes() {
             class: "primario",
             onclick: async () => {
               try {
+                const agyModelos = Object.fromEntries(modelosAgy.value.split(/\r?\n/).map((linha) => linha.split(/=(.*)/s)).filter(([chave, valor]) => chave && valor != null).map(([chave, valor]) => [chave.trim(), valor.trim()]));
                 await chamar(api.config.salvar({
                   limiar_confianca: Number(limiar.value),
                   limiar_noul: Number(limiarNoul.value),
                   modo_executor: modoExecutor.value,
                   agy_sem_confirmacao: semConfirmacao.checked,
-                  agy_modelos: Object.fromEntries(modelosAgy.value.split(/\r?\n/).map((linha) => linha.split(/=(.*)/s)).filter(([chave, valor]) => chave && valor != null).map(([chave, valor]) => [chave.trim(), valor.trim()])),
+                  agy_modelos: agyModelos,
                   permission_mode: modo.value,
                   allowed_tools: ferramentas.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
                 }));
+                estado.configuracao = { ...config, agy_modelos: agyModelos, permission_mode: modo.value };
+                estado.modoPermissao = modo.value;
                 aviso.className = "ok";
                 aviso.textContent = "Configurações salvas.";
               } catch (erro) {
