@@ -12,6 +12,7 @@ const estado = {
   execucaoAtual: null,
   executando: new Set(),
   modoModelo: "automatico",
+  modoExecutor: "automatico",
   timeoutMin: 30,
   tarefa: "",
   anexos: [],
@@ -413,7 +414,7 @@ async function executar(continuacao = null) {
   renderPrincipal();
   let resposta;
   try {
-    resposta = await chamar(api.tarefa.executar({ projetoId: projeto.id, conversaId: conversaOrigem, tarefa, modoModelo: estado.modoModelo, timeoutMin: Number(estado.timeoutMin), anexoIds, aprovadas: continuacao ? continuacao.aprovadas : [] }));
+    resposta = await chamar(api.tarefa.executar({ projetoId: projeto.id, conversaId: conversaOrigem, tarefa, modoModelo: estado.modoModelo, modoExecutor: estado.modoExecutor, timeoutMin: Number(estado.timeoutMin), anexoIds, aprovadas: continuacao ? continuacao.aprovadas : [] }));
   } catch (erro) {
     resposta = { status: "erro", resultado: erro.message, avisos: [], modelo: null };
   }
@@ -483,6 +484,8 @@ function mensagemClaude(h) {
   return el("div", { class: "msg claude" },
     el("div", { class: "linha quebra meta" },
       h.modelo ? el("span", { class: `selo ${h.modelo}` }, h.modelo) : null,
+      h.executor ? el("span", { class: "selo" }, h.executor) : null,
+      h.fallback_de ? el("span", { class: "aviso" }, `fallback de ${h.fallback_de}`) : null,
       el("span", { class: `selo ${h.status}` }, h.status),
       h.created_at ? el("span", { class: "fog" }, formatarData(h.created_at)) : null,
       h.duracao_ms != null ? el("span", { class: "fog" }, formatarDuracao(h.duracao_ms)) : null
@@ -572,14 +575,25 @@ function compositor(projeto) {
   );
   modelo.addEventListener("change", () => { estado.modoModelo = modelo.value; });
 
+  const executor = el("select", { disabled: rodando },
+    [["automatico", "Executor automático"], ["claude_code", "Claude Code"], ["antigravity", "Antigravity"]].map(([valor, rotulo]) => {
+      const opcao = el("option", { value: valor }, rotulo);
+      if (valor === estado.modoExecutor) opcao.selected = true;
+      return opcao;
+    })
+  );
+  executor.addEventListener("change", () => { estado.modoExecutor = executor.value; });
+
   const tempo = el("input", { type: "number", min: "1", max: "240", value: String(estado.timeoutMin), class: "curto", title: "Tempo limite (min)", disabled: rodando });
   tempo.addEventListener("input", () => { estado.timeoutMin = tempo.value; });
 
   const caixa = el("div", { class: "compositor" },
     chips.length ? el("div", { class: "linha quebra" }, chips) : null,
     campo,
+    estado.modoExecutor === "antigravity" ? el("div", { class: "aviso" }, "Nova conversa não reinicia o contexto do Antigravity.") : null,
     el("div", { class: "linha quebra" },
       el("button", { onclick: selecionarAnexos, disabled: rodando }, "Anexar"),
+      executor,
       modelo,
       el("span", { class: "fog" }, "min"),
       tempo,
@@ -673,6 +687,12 @@ async function telaConfiguracoes() {
     return;
   }
   const limiar = el("input", { type: "number", min: "0", max: "1", step: "0.05", value: String(config.limiar_confianca) });
+  const limiarNoul = el("input", { type: "number", min: "0", max: "1", step: "0.05", value: String(config.limiar_noul ?? 0.7) });
+  const modoExecutor = el("select", {}, ["automatico", "claude_code", "antigravity"].map((m) => { const opcao = el("option", { value: m }, m); if (m === (config.modo_executor ?? "automatico")) opcao.selected = true; return opcao; }));
+  const semConfirmacao = el("input", { type: "checkbox" });
+  semConfirmacao.checked = Boolean(config.agy_sem_confirmacao);
+  const modelosAgy = el("textarea", { placeholder: "flash=\nflash_alto=\npro=" });
+  modelosAgy.value = Object.entries(config.agy_modelos ?? {}).map(([chave, valor]) => `${chave}=${valor}`).join("\n");
   const modo = el("select", {},
     ["default", "acceptEdits", "plan"].map((m) => {
       const opcao = el("option", { value: m }, m);
@@ -689,6 +709,10 @@ async function telaConfiguracoes() {
       el("div", { class: "cartao largo" },
         el("h1", { class: "titulo-gradiente" }, "Configurações"),
         el("div", { class: "campo" }, el("label", {}, "Limiar de confiança do Jev (0 a 1)"), limiar),
+        el("div", { class: "campo" }, el("label", {}, "Limiar do Noul (0 a 1)"), limiarNoul),
+        el("div", { class: "campo" }, el("label", {}, "Executor padrão"), modoExecutor),
+        el("div", { class: "campo" }, el("label", {}, "Modelos do Antigravity (chave=rótulo exibido pelo agy models)"), modelosAgy),
+        el("div", { class: "linha" }, semConfirmacao, el("label", {}, "Permitir ações sem confirmação no Antigravity")),
         el("div", { class: "campo" }, el("label", {}, "Modo de permissão"), modo),
         el("div", { class: "campo" }, el("label", {}, "Ferramentas permitidas"), ferramentas),
         aviso,
@@ -699,6 +723,10 @@ async function telaConfiguracoes() {
               try {
                 await chamar(api.config.salvar({
                   limiar_confianca: Number(limiar.value),
+                  limiar_noul: Number(limiarNoul.value),
+                  modo_executor: modoExecutor.value,
+                  agy_sem_confirmacao: semConfirmacao.checked,
+                  agy_modelos: Object.fromEntries(modelosAgy.value.split(/\r?\n/).map((linha) => linha.split(/=(.*)/s)).filter(([chave, valor]) => chave && valor != null).map(([chave, valor]) => [chave.trim(), valor.trim()])),
                   permission_mode: modo.value,
                   allowed_tools: ferramentas.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
                 }));
@@ -741,7 +769,7 @@ async function iniciar() {
       telaOrientacaoClaude();
       return;
     }
-    estado.avisoAmbiente = ambiente.typesafe ? null : "Chave do Jev ausente. O modo automático usará sonnet como padrão.";
+    estado.avisoAmbiente = [!ambiente.typesafe ? "Chave do Jev ausente. O modo automático usará sonnet como padrão." : null, ambiente.agy.aviso].filter(Boolean).join(" ") || null;
     const sessao = await chamar(api.auth.restaurar());
     if (sessao) {
       estado.email = sessao.email;

@@ -1,5 +1,13 @@
 # Doomsday
 
+## Antigravity CLI
+
+O executor Antigravity é opcional. Neste ambiente, `agy --help`, `agy --version` e `agy models` não puderam ser executados porque o binário não está instalado nem no PATH. Os rótulos dos modelos não foram inventados: após instalar e autenticar o CLI, copie os nomes exibidos por `agy models` para as configurações `flash`, `flash_alto` e `pro`.
+
+O app procura primeiro `%LOCALAPPDATA%\agy\bin\agy.exe` e depois `agy` no PATH. A execução usa `--print` como último par de argumentos, stdin ignorado e timeout externo de 30 minutos. Se a versão instalada não oferecer `--model`, o app usa o modelo configurado pelo próprio CLI e mostra um aviso.
+
+Execute a migração [migracao-antigravity.sql](supabase/migracao-antigravity.sql) no editor SQL do Supabase para acrescentar os campos do executor às instalações já existentes.
+
 Doomsday é um aplicativo desktop (Electron) que controla o Claude Code instalado na sua máquina. Para cada tarefa, o Jev escolhe o modelo (haiku, sonnet ou opus), o `claude` roda em modo headless na pasta do projeto e o resultado aparece na tela. Projetos, sessões e histórico ficam no Supabase.
 
 ## Requisitos

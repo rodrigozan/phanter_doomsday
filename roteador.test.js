@@ -1,10 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decidirModelo } from "./roteador.js";
+import { decidirModelo, decidirRota } from "./roteador.js";
 
 const r = (tipo, tc, score, cc) => ({
   tipo: { choice: tipo, confidence: tc },
   complexidade: { score, confidence: cc }
+});
+
+test("tarefa visual é roteada para Antigravity", () => {
+  const respostas = { ...r("feature", 0.9, 1, 0.9), interface_visual: { score: 0.8 }, multimodal: { score: 0.1 }, contexto_grande: { score: 0.1 } };
+  assert.deepEqual(decidirRota(respostas, { agy_modelos: { flash_alto: "Flash Alto" } }), { executor: "antigravity", modelo: "Flash Alto" });
+});
+
+test("tarefa de backend fica no Claude Code", () => {
+  const respostas = { ...r("feature", 0.9, 1, 0.9), interface_visual: { score: 0.1 }, multimodal: { score: 0.1 }, contexto_grande: { score: 0.1 } };
+  assert.deepEqual(decidirRota(respostas), { executor: "claude_code", modelo: "sonnet" });
 });
 
 test("confiança baixa no tipo cai para sonnet", () => {

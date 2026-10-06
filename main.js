@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import * as banco from "./supabase.js";
 import * as orquestrador from "./orquestrador.js";
 import { verificarClaude, MODOS_PERMISSAO } from "./claude.js";
+import { verificarAgy } from "./agy.js";
+import { normalizarModelosAntigravity } from "./modelos.js";
 
 const raiz = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(raiz, ".env"), quiet: true });
@@ -148,7 +150,11 @@ function validarConfig(config) {
   if (!MODOS_PERMISSAO.includes(config?.permission_mode)) throw new Error("Modo de permissão inválido.");
   if (!Array.isArray(config?.allowed_tools)) throw new Error("Lista de ferramentas inválida.");
   const ferramentas = config.allowed_tools.map((item) => texto(item, 200).trim()).filter(Boolean);
-  return { limiar_confianca: limiar, permission_mode: config.permission_mode, allowed_tools: ferramentas };
+  const limiarNoul = Number(config?.limiar_noul);
+  if (!Number.isFinite(limiarNoul) || limiarNoul < 0 || limiarNoul > 1) throw new Error("O limiar Noul deve estar entre 0 e 1.");
+  if (!["automatico", "claude_code", "antigravity"].includes(config?.modo_executor)) throw new Error("Modo de executor inválido.");
+  if (typeof config?.agy_sem_confirmacao !== "boolean") throw new Error("Opção do Antigravity inválida.");
+  return { limiar_confianca: limiar, limiar_noul: limiarNoul, modo_executor: config.modo_executor, agy_sem_confirmacao: config.agy_sem_confirmacao, agy_modelos: normalizarModelosAntigravity(config.agy_modelos), permission_mode: config.permission_mode, allowed_tools: ferramentas };
 }
 
 function registrarHandlers() {
@@ -156,6 +162,7 @@ function registrarHandlers() {
 
   tratar("ambiente:verificar", async () => ({
     claude: await verificarClaude(),
+    agy: await verificarAgy(),
     typesafe: Boolean(process.env.TYPESAFE_API_KEY)
   }), { exigeSessao: false });
 
@@ -276,6 +283,7 @@ function registrarHandlers() {
         conversaId: dados?.conversaId ? idValido(dados.conversaId) : null,
         tarefa: texto(dados?.tarefa, 50000),
         modoModelo: texto(dados?.modoModelo, 20),
+        modoExecutor: texto(dados?.modoExecutor ?? "automatico", 20),
         timeoutMin: dados?.timeoutMin,
         anexos: usados,
         aprovadas

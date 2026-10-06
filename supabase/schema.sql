@@ -25,6 +25,8 @@ create table execucoes (
   tarefa text not null,
   modelo text not null,
   modo_modelo text not null default 'automatico',
+  executor text not null default 'claude_code',
+  fallback_de text,
   jev jsonb,
   status text not null default 'concluida',
   resultado text,
@@ -35,6 +37,10 @@ create table execucoes (
 create table configuracoes (
   user_id uuid primary key default auth.uid() references auth.users(id),
   limiar_confianca numeric not null default 0.5,
+  modo_executor text not null default 'automatico',
+  limiar_noul numeric not null default 0.7,
+  agy_sem_confirmacao boolean not null default false,
+  agy_modelos jsonb not null default '{}'::jsonb,
   permission_mode text not null default 'acceptEdits',
   allowed_tools text[] not null default '{}',
   updated_at timestamptz default now()

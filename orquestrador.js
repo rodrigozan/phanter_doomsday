@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { executarClaude, TIMEOUT_PADRAO_MS } from "./claude.js";
+import { executarAgy, verificarAgy } from "./agy.js";
 import { rotear, MODELOS } from "./roteador.js";
 import * as banco from "./supabase.js";
 
@@ -33,7 +34,7 @@ export function montarPrompt(texto, anexos) {
   return `${texto}\n\nArquivos anexados:\n${referencias.join("\n")}`;
 }
 
-export async function executar({ projetoId, conversaId = null, tarefa, modoModelo = "automatico", timeoutMin, anexos = [], aprovadas = [] }) {
+export async function executar({ projetoId, conversaId = null, tarefa, modoModelo = "automatico", modoExecutor = "automatico", timeoutMin, anexos = [], aprovadas = [] }) {
   if (!MODOS_MODELO.includes(modoModelo)) throw new Error("Modo de modelo inválido.");
   const texto = String(tarefa ?? "").trim();
   if (!texto) throw new Error("Digite a tarefa a ser executada.");
@@ -57,30 +58,51 @@ export async function executar({ projetoId, conversaId = null, tarefa, modoModel
     const config = await banco.obterConfiguracao();
 
     let modelo = modoModelo;
+    let executor = modoExecutor;
     let jev = null;
-    if (modoModelo === "automatico") {
-      const rota = await rotear(texto, Number(config.limiar_confianca));
+    if (modoModelo === "automatico" || modoExecutor === "automatico") {
+      const rota = await rotear(texto, { ...config, modo_executor: modoExecutor });
       modelo = rota.modelo;
+      executor = rota.executor;
       jev = rota.jev;
       if (rota.aviso) avisos.push(rota.aviso);
     }
+    if (modoModelo !== "automatico" && executor === "claude_code") modelo = modoModelo;
+    const ambienteAgy = executor === "antigravity" ? await verificarAgy() : null;
+    if (executor === "antigravity" && !ambienteAgy.disponivel) {
+      if (modoExecutor === "antigravity") throw new Error(ambienteAgy.aviso);
+      avisos.push(`${ambienteAgy.aviso} Usando Claude Code.`);
+      executor = "claude_code";
+      modelo = modoModelo === "automatico" ? "sonnet" : modoModelo;
+    }
+    if (executor === "antigravity" && !modelo) throw new Error("Configure os rótulos dos modelos do Antigravity antes de executar.");
 
     const minutos = Number(timeoutMin);
     const timeoutMs = Number.isFinite(minutos) && minutos >= 1 && minutos <= 240 ? minutos * 60 * 1000 : TIMEOUT_PADRAO_MS;
 
-    const processo = executarClaude({
-      cwd: projeto.caminho,
-      prompt: montarPrompt(texto, anexos),
-      diretorios: [...new Set(anexos.map((a) => dirname(a.caminho)))],
-      modelo,
-      modoPermissao: config.permission_mode,
-      sessionId: conversa.session_id,
-      ferramentas: [...new Set([...(config.allowed_tools ?? []), ...aprovadas])],
-      timeoutMs
-    });
+    const prompt = montarPrompt(texto, anexos);
+    const criarProcesso = (qual, modeloEscolhido) => qual === "antigravity"
+      ? executarAgy({ cwd: projeto.caminho, prompt, modelo: modeloEscolhido, permitirSemConfirmacao: config.agy_sem_confirmacao, suportaModelo: ambienteAgy?.suportaModelo ?? true, timeoutMs })
+      : executarClaude({ cwd: projeto.caminho, prompt, diretorios: [...new Set(anexos.map((a) => dirname(a.caminho)))], modelo: modeloEscolhido, modoPermissao: config.permission_mode, sessionId: conversa.session_id, ferramentas: [...new Set([...(config.allowed_tools ?? []), ...aprovadas])], timeoutMs });
+    if (executor === "antigravity" && !config.agy_sem_confirmacao) avisos.push("No Antigravity, tarefas que editam arquivos ou rodam comandos podem aguardar confirmação até o tempo limite.");
+    let processo = criarProcesso(executor, modelo);
     ativas.set(projetoId, processo);
 
-    const saida = await processo.promessa;
+    let saida = await processo.promessa;
+    let fallbackDe = null;
+    if (saida.status === "erro") {
+      const outro = executor === "antigravity" ? "claude_code" : "antigravity";
+      const outroAmbiente = outro === "antigravity" ? await verificarAgy() : null;
+      if (outro !== "antigravity" || outroAmbiente.disponivel) {
+        fallbackDe = executor;
+        executor = outro;
+        modelo = outro === "claude_code" ? "sonnet" : config.agy_modelos?.flash;
+        avisos.push(`Falha no executor inicial. Executando fallback com ${executor}.`);
+        processo = criarProcesso(executor, modelo);
+        ativas.set(projetoId, processo);
+        saida = await processo.promessa;
+      }
+    }
 
     if (saida.status === "concluida" && saida.sessionId) {
       try {
@@ -100,6 +122,8 @@ export async function executar({ projetoId, conversaId = null, tarefa, modoModel
         tarefa: anexos.length ? `${texto}\n\n[Anexos: ${anexos.map((a) => a.nome).join(", ")}]` : texto,
         modelo,
         modo_modelo: modoModelo,
+        executor,
+        fallback_de: fallbackDe,
         jev,
         status: saida.status,
         resultado: textoResultado,
@@ -115,6 +139,8 @@ export async function executar({ projetoId, conversaId = null, tarefa, modoModel
     return {
       conversaId: conversa.id,
       modelo,
+      executor,
+      fallbackDe,
       status: saida.status,
       resultado: textoResultado,
       duracaoMs: saida.duracaoMs,
