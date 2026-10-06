@@ -1,0 +1,6 @@
+{
+  "watch": ["main.js", "preload.cjs", "orquestrador.js", "roteador.js", "claude.js", "supabase.js", "renderer", ".env"],
+  "ext": "js,cjs,html,css,env",
+  "exec": "electron .",
+  "delay": 500
+}
